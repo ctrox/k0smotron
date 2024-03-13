@@ -19,8 +19,9 @@ package k0smotronio
 import (
 	"context"
 	"fmt"
-	"github.com/k0sproject/k0smotron/internal/controller/util"
 	"time"
+
+	"github.com/k0sproject/k0smotron/internal/controller/util"
 
 	km "github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta1"
 	v1 "k8s.io/api/core/v1"
@@ -46,6 +47,12 @@ func (r *ClusterReconciler) generateService(kmc *km.Cluster) v1.Service {
 				NodePort:   int32(kmc.Spec.Service.APIPort),
 			},
 			v1.ServicePort{
+				Port:       int32(kmc.Spec.Service.K0sAPIPort),
+				TargetPort: intstr.FromInt(kmc.Spec.Service.K0sAPIPort),
+				Name:       "k0sapi",
+				NodePort:   int32(kmc.Spec.Service.K0sAPIPort),
+			},
+			v1.ServicePort{
 				Port:       int32(kmc.Spec.Service.KonnectivityPort),
 				TargetPort: intstr.FromInt(kmc.Spec.Service.KonnectivityPort),
 				Name:       "konnectivity",
@@ -59,6 +66,11 @@ func (r *ClusterReconciler) generateService(kmc *km.Cluster) v1.Service {
 				Port:       int32(kmc.Spec.Service.APIPort),
 				TargetPort: intstr.FromInt(kmc.Spec.Service.APIPort),
 				Name:       "api",
+			},
+			v1.ServicePort{
+				Port:       int32(kmc.Spec.Service.K0sAPIPort),
+				TargetPort: intstr.FromInt(kmc.Spec.Service.K0sAPIPort),
+				Name:       "k0sapi",
 			},
 			v1.ServicePort{
 				Port:       int32(kmc.Spec.Service.KonnectivityPort),
@@ -78,6 +90,11 @@ func (r *ClusterReconciler) generateService(kmc *km.Cluster) v1.Service {
 				Port:       int32(kmc.Spec.Service.APIPort),
 				TargetPort: intstr.FromInt(kmc.Spec.Service.APIPort),
 				Name:       "api",
+			},
+			v1.ServicePort{
+				Port:       int32(kmc.Spec.Service.K0sAPIPort),
+				TargetPort: intstr.FromInt(kmc.Spec.Service.K0sAPIPort),
+				Name:       "k0sapi",
 			},
 			v1.ServicePort{
 				Port:       int32(kmc.Spec.Service.KonnectivityPort),
@@ -118,6 +135,38 @@ func (r *ClusterReconciler) generateService(kmc *km.Cluster) v1.Service {
 	return svc
 }
 
+func (r *ClusterReconciler) generateETCDService(kmc *km.Cluster) v1.Service {
+	svc := v1.Service{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Service",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        kmc.GetETCDPortServiceName(),
+			Namespace:   kmc.Namespace,
+			Labels:      labelsForCluster(kmc),
+			Annotations: annotationsForCluster(kmc),
+		},
+		Spec: v1.ServiceSpec{
+			// this is really important as a joining node won't have a
+			// successful readinessProbe and thus the initial node won't be
+			// able to resolve the joining node unless we publish the not
+			// ready joining node.
+			PublishNotReadyAddresses: true,
+			Type:                     v1.ServiceTypeClusterIP,
+			ClusterIP:                v1.ClusterIPNone,
+			Selector:                 labelsForCluster(kmc),
+			Ports: []v1.ServicePort{{
+				Port:       int32(2380),
+				TargetPort: intstr.FromInt(2380),
+				Name:       "etcd",
+			}},
+		},
+	}
+
+	return svc
+}
+
 func (r *ClusterReconciler) reconcileServices(ctx context.Context, kmc km.Cluster) error {
 	logger := log.FromContext(ctx)
 	// Depending on ingress configuration create nodePort service.
@@ -129,6 +178,15 @@ func (r *ClusterReconciler) reconcileServices(ctx context.Context, kmc km.Cluste
 	if err := r.Client.Patch(ctx, &svc, client.Apply, patchOpts...); err != nil {
 		return err
 	}
+
+	if kmc.Spec.ETCDHighAvailability {
+		etcdSvc := r.generateETCDService(&kmc)
+		_ = ctrl.SetControllerReference(&kmc, &etcdSvc, r.Scheme)
+		if err := r.Client.Patch(ctx, &etcdSvc, client.Apply, patchOpts...); err != nil {
+			return err
+		}
+	}
+
 	// Wait for LB address to be available
 	logger.Info("Waiting for loadbalancer address")
 	if kmc.Spec.Service.Type == v1.ServiceTypeLoadBalancer && kmc.Spec.ExternalAddress == "" {

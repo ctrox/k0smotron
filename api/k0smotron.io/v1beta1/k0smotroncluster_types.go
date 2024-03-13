@@ -30,7 +30,8 @@ import (
 // ClusterSpec defines the desired state of K0smotronCluster
 type ClusterSpec struct {
 	// Replicas is the desired number of replicas of the k0s control planes.
-	// If unspecified, defaults to 1. If the value is above 1, k0smotron requires kine datasource URL to be set.
+	// If unspecified, defaults to 1. If the value is above 1, k0smotron requires
+	// kine datasource URL to be set or ETCDHighAvailability to be enabled.
 	// Recommended value is 3.
 	//+kubebuilder:validation:Optional
 	//+kubebuilder:default=1
@@ -65,6 +66,9 @@ type ClusterSpec struct {
 	// and one of them must be set if replicas > 1.
 	//+kubebuilder:validation:Optional
 	KineDataSourceSecretName string `json:"kineDataSourceSecretName,omitempty"`
+	// ETCDHighAvailability enables etcd in HA mode.
+	//+kubebuilder:validation:Optional
+	ETCDHighAvailability bool `json:"etcdHighAvailability,omitempty"`
 	// k0sConfig defines the k0s configuration. Note, that some fields will be overwritten by k0smotron.
 	// If empty, will be used default configuration. @see https://docs.k0sproject.io/stable/configuration/
 	//+kubebuilder:validation:Optional
@@ -132,7 +136,11 @@ type ServiceSpec struct {
 	//+kubebuilder:validation:Optional
 	//+kubebuilder:default=30132
 	KonnectivityPort int `json:"konnectivityPort,omitempty"`
-
+	// K0sAPIPort defines the k0s API port. If empty k0smotron
+	// will pick it automatically.
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:default=31443
+	K0sAPIPort int `json:"k0sApiPort,omitempty"`
 	// Annotations defines extra annotations to be added to the service.
 	//+kubebuilder:validation:Optional
 	Annotations map[string]string `json:"annotations,omitempty"`
@@ -246,4 +254,12 @@ func (kmc *Cluster) GetNodePortServiceName() string {
 
 func (kmc *Cluster) GetVolumeName() string {
 	return fmt.Sprintf("kmc-%s", kmc.Name)
+}
+
+func (kmc *Cluster) GetControllerJoinTokenName() string {
+	return fmt.Sprintf("kmc-%s-controller-jtk", kmc.Name)
+}
+
+func (kmc *Cluster) GetETCDPortServiceName() string {
+	return fmt.Sprintf("kmc-%s-etcd", kmc.Name)
 }

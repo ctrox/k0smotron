@@ -54,9 +54,8 @@ func (r *ClusterReconciler) generateStatefulSet(kmc *km.Cluster) (apps.StatefulS
 		}
 	}
 
-	if kmc.Spec.Replicas > 1 && (kmc.Spec.KineDataSourceURL == "" && kmc.Spec.KineDataSourceSecretName == "") {
-		return apps.StatefulSet{}, errors.New("kineDataSourceURL can't be empty if replicas > 1")
-
+	if kmc.Spec.Replicas > 1 && ((kmc.Spec.KineDataSourceURL == "" && kmc.Spec.KineDataSourceSecretName == "") && !kmc.Spec.ETCDHighAvailability) {
+		return apps.StatefulSet{}, errors.New("kineDataSourceURL can't be empty or ETCDHighAvailability has to be enabled if replicas > 1")
 	}
 
 	labels := labelsForCluster(kmc)
@@ -104,21 +103,23 @@ func (r *ClusterReconciler) generateStatefulSet(kmc *km.Cluster) (apps.StatefulS
 							},
 						},
 					}},
-					Volumes: []v1.Volume{{
-						Name: kmc.GetEntrypointConfigMapName(),
-						VolumeSource: v1.VolumeSource{
-							ConfigMap: &v1.ConfigMapVolumeSource{
-								LocalObjectReference: v1.LocalObjectReference{
-									Name: kmc.GetEntrypointConfigMapName(),
+					Volumes: []v1.Volume{
+						{
+							Name: kmc.GetEntrypointConfigMapName(),
+							VolumeSource: v1.VolumeSource{
+								ConfigMap: &v1.ConfigMapVolumeSource{
+									LocalObjectReference: v1.LocalObjectReference{
+										Name: kmc.GetEntrypointConfigMapName(),
+									},
+									DefaultMode: &entrypointDefaultMode,
+									Items: []v1.KeyToPath{{
+										Key:  "k0smotron-entrypoint.sh",
+										Path: "k0smotron-entrypoint.sh",
+									}},
 								},
-								DefaultMode: &entrypointDefaultMode,
-								Items: []v1.KeyToPath{{
-									Key:  "k0smotron-entrypoint.sh",
-									Path: "k0smotron-entrypoint.sh",
-								}},
 							},
 						},
-					}},
+					},
 					Containers: []v1.Container{{
 						Name:            "controller",
 						Image:           fmt.Sprintf("%s:%s", kmc.Spec.Image, k0sVersion),
@@ -177,6 +178,27 @@ func (r *ClusterReconciler) generateStatefulSet(kmc *km.Cluster) (apps.StatefulS
 			},
 		})
 	}
+
+	if kmc.Spec.ETCDHighAvailability {
+		statefulSet.Spec.ServiceName = kmc.GetETCDPortServiceName()
+
+		statefulSet.Spec.Template.Spec.Volumes = append(statefulSet.Spec.Template.Spec.Volumes, v1.Volume{
+			Name: kmc.GetControllerJoinTokenName(),
+			VolumeSource: v1.VolumeSource{
+				Secret: &v1.SecretVolumeSource{
+					SecretName:  kmc.GetControllerJoinTokenName(),
+					DefaultMode: &entrypointDefaultMode,
+				},
+			},
+		})
+
+		statefulSet.Spec.Template.Spec.Containers[0].VolumeMounts = append(statefulSet.Spec.Template.Spec.Containers[0].VolumeMounts, v1.VolumeMount{
+			Name:      kmc.GetControllerJoinTokenName(),
+			MountPath: "/join",
+		})
+
+	}
+
 	// Mount certificates if they are provided
 	if kmc.Spec.CertificateRefs != nil && len(kmc.Spec.CertificateRefs) > 0 {
 		r.mountSecrets(kmc, &statefulSet)
@@ -359,9 +381,10 @@ func (r *ClusterReconciler) mountSecrets(kmc *km.Cluster, sfs *apps.StatefulSet)
 		},
 	})
 
-	// We need to copy the certs from the projected volume to the /var/lib/k0s/pki directory
-	// Otherwise k0s will trip over the permissions and RO mounts
-	sfs.Spec.Template.Spec.InitContainers = append(sfs.Spec.Template.Spec.InitContainers, v1.Container{
+	// We need to copy the certs from the projected volume to the
+	// /var/lib/k0s/pki directory Otherwise k0s will trip over the permissions
+	// and RO mounts.
+	certsInitContainer := v1.Container{
 		Name:  "certs-init",
 		Image: "busybox",
 		Command: []string{
@@ -379,7 +402,20 @@ func (r *ClusterReconciler) mountSecrets(kmc *km.Cluster, sfs *apps.StatefulSet)
 				MountPath: "/var/lib/k0s",
 			},
 		},
-	})
+	}
+
+	if kmc.Spec.ETCDHighAvailability {
+		// In HA mode, the certs are just needed for the first replica as the join
+		// process will create the certs for the other replicas. If certs exist on
+		// replicas, the join process is skipped.
+		certsInitContainer.Command = []string{
+			"sh",
+			"-c",
+			"if [ \"${HOSTNAME##*-}\" == \"0\" ]; then mkdir -p /var/lib/k0s/pki && cp /certs-init/*.* /var/lib/k0s/pki/; fi",
+		}
+	}
+
+	sfs.Spec.Template.Spec.InitContainers = append(sfs.Spec.Template.Spec.InitContainers, certsInitContainer)
 }
 
 func (r *ClusterReconciler) addMonitoringStack(kmc *km.Cluster, statefulSet *apps.StatefulSet) {

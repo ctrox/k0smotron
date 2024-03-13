@@ -40,6 +40,9 @@ func (r *ClusterReconciler) generateEntrypointCM(kmc *km.Cluster) (v1.ConfigMap,
 	var entrypointBuf bytes.Buffer
 	err := entrypointTmpl.Execute(&entrypointBuf, map[string]string{
 		"KineDataSourceURLPlaceholder": kineDataSourceURLPlaceholder,
+		"ETCDPeerAddressPlaceholder":   etcdPeerAddressPlaceholder,
+		"ETCDListenAddressPlaceholder": etcdListenAddressPlaceholder,
+		"ETCDServiceName":              kmc.GetETCDPortServiceName(),
 		"K0sControllerArgs":            r.getControllerFlags(kmc),
 	})
 	if err != nil {
@@ -110,6 +113,15 @@ mkdir /etc/k0s && echo "$K0SMOTRON_K0S_YAML" > /etc/k0s/k0s.yaml
 # Substitute the kine datasource URL from the env var
 sed -i "s {{ .KineDataSourceURLPlaceholder }} ${K0SMOTRON_KINE_DATASOURCE_URL} g" /etc/k0s/k0s.yaml
 
+# Substitute etcd addresses
+sed -i "s {{ .ETCDPeerAddressPlaceholder }} ${HOSTNAME}.{{ .ETCDServiceName }} g" /etc/k0s/k0s.yaml
+sed -i "s {{ .ETCDListenAddressPlaceholder }} https://0.0.0.0:2380 g" /etc/k0s/k0s.yaml
+
 # Run the k0s controller
-k0s controller {{ .K0sControllerArgs }}
+if [[ "${HOSTNAME##*-}" == "0" ]]; then
+	k0s controller {{ .K0sControllerArgs }}
+else
+	# add join token to all replicas except the first
+	k0s controller {{ .K0sControllerArgs }} --token-file /join/token
+fi
 `

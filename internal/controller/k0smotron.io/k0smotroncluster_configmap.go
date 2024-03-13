@@ -31,7 +31,11 @@ import (
 	km "github.com/k0sproject/k0smotron/api/k0smotron.io/v1beta1"
 )
 
-const kineDataSourceURLPlaceholder = "__K0SMOTRON_KINE_DATASOURCE_URL_PLACEHOLDER__"
+const (
+	kineDataSourceURLPlaceholder = "__K0SMOTRON_KINE_DATASOURCE_URL_PLACEHOLDER__"
+	etcdPeerAddressPlaceholder   = "__K0SMOTRON_ETCD_PEER_ADDRESS_PLACEHOLDER__"
+	etcdListenAddressPlaceholder = "__K0SMOTRON_ETCD_LISTEN_ADDRESS_PLACEHOLDER__"
+)
 
 // generateCM merges provided config with k0smotron generated values and generates the k0s configmap
 // We use plain map[string]interface{} for the following reasons:
@@ -144,6 +148,8 @@ func getV1Beta1Spec(kmc *km.Cluster) map[string]interface{} {
 		"api": map[string]interface{}{
 			"externalAddress": kmc.Spec.ExternalAddress,
 			"port":            kmc.Spec.Service.APIPort,
+			"k0sApiPort":      kmc.Spec.Service.K0sAPIPort,
+			"sans":            []string{kmc.Spec.ExternalAddress},
 		},
 		"konnectivity": map[string]interface{}{
 			"agentPort": kmc.Spec.Service.KonnectivityPort,
@@ -154,6 +160,19 @@ func getV1Beta1Spec(kmc *km.Cluster) map[string]interface{} {
 			"type": "kine",
 			"kine": map[string]interface{}{
 				"dataSource": kmc.Spec.KineDataSourceURL,
+			},
+		}
+	}
+	if kmc.Spec.ETCDHighAvailability {
+		v1beta1Spec["storage"] = map[string]interface{}{
+			"etcd": map[string]interface{}{
+				"peerAddress": etcdPeerAddressPlaceholder,
+				// the peerAddress setting also overrides the listen-peer-urls
+				// with our hostname, which has to be an IP address. To work
+				// around this, we additionally override the listen-peer-urls arg.
+				"extraArgs": map[string]interface{}{
+					"listen-peer-urls": etcdListenAddressPlaceholder,
+				},
 			},
 		}
 	}

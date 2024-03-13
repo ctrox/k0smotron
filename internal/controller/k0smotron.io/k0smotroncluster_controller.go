@@ -133,6 +133,13 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
+	if kmc.Spec.ETCDHighAvailability {
+		if err := r.reconcileControllerJoinToken(ctx, kmc); err != nil {
+			r.updateStatus(ctx, kmc, "Failed reconciling controller join token")
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Minute}, err
+		}
+	}
+
 	logger.Info("Reconciling statefulset")
 	if err := r.reconcileStatefulSet(ctx, kmc); err != nil {
 		r.updateStatus(ctx, kmc, fmt.Sprintf("Failed reconciling statefulset, %+v", err))
